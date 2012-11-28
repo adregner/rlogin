@@ -1,0 +1,211 @@
+#!/usr/bin/env ruby
+require 'expectr'
+require 'optparse'
+require 'etc'
+require 'event-expectr'
+
+options = {:port => 22}
+
+OptionParser.new do |opts|
+  opts.separator ""
+  opts.separator "Target server options"
+
+  opts.on("--host HOSTNAME",
+          "Hostname or IP address to connect to") { |opt| options[:host] = opt }
+
+  opts.on("--user USERNAME",
+          "Username to log in as") { |opt| options[:user] = opt }
+
+  opts.on("--port [PORT]",
+          "Port number to connect to (default: 22)") { |opt| options[:port] = opt.to_i }
+
+  opts.on("--password [PASSWORD]",
+          "Password or SSH key passphrase to authenticate with") { |opt| options[:password] = opt }
+
+  opts.on("--ssh-key [SSH_KEY_FILE]",
+          "SSH private key file to use (use --password to specify a passphrase)") { |opt| options[:key] = opt }
+
+  opts.on("--root-method [METHOD]", [:su, :sudo],
+          "Method to use to gain root access") { |opt| options[:root_method] = opt }
+
+  opts.on("--superuser-password [PASSWORD]",
+          "Root password to use when using \"su\" root method") { |opt| options[:root_password] = opt }
+
+  opts.separator ""
+  opts.separator "SSH Proxy (bastion) options"
+
+  opts.on("--proxy [PROXY_HOSTNAME]",
+          "Proxy hostname to login to the server with") { |opt| options[:proxy] = opt }
+
+  opts.on("--proxy-port [PROXY_PORT]",
+          "Port number to SSH into the proxy server with") { |opt| options[:proxy_port] = opt.to_i }
+
+  opts.on("--proxy-user [USERNAME]",
+          "Username to SSH into the proxy with") { |opt| options[:proxy_user] = opt }
+
+  opts.on("--proxy-password [PASSWORD]",
+         "Password or key passphrase for the proxy server") { |opt| options[:proxy_password] = opt }
+
+  opts.on("--proxy-ssh-key [PROXY_SSH_KEY_FILE]",
+         "SSH private key to log into the server with") { |opt| options[:proxy_key] = opt }
+
+  opts.separator ""
+  opts.separator "Misc options"
+
+  opts.on("--ssh-config [FILENAME]",
+          "Adds the contents of the provided ssh_config file to rlogin's master ssh_config file.  You can also edit the master file by hand, it is located in #{File.join(ENV['HOME'], '.config/rlogin/ssh_config')}"
+         ) { |opt| options[:ssh_config] = opt }
+
+  opts.on("--debug", "Echo the entire login sequence, along with what we write to the stream."
+         ) { |opt| options[:debug] = true }
+
+  opts.on_tail("-h", "--help", "Show this help message") do
+    puts opts
+    exit
+  end
+end.parse!
+
+##########################################################
+
+config_file = File.expand_path "~/.config/rlogin/ssh_config"
+
+if options[:ssh_config]
+  require 'digest'
+  hash_header = sprintf("##### hash %s", Digest::MD5.file(options[:ssh_config]).hexdigest)
+
+  master_config = File.read(config_file).split("\n")
+
+  if master_config.include? hash_header
+    puts "This file's contents are already included in the rlogin ssh_config file"
+  else
+    filename_header = sprintf("##### filename %s", options[:ssh_config])
+    if master_config.include? filename_header
+      puts "Deleting other entry in the rlogin ssh_config file that is also named #{options[:ssh_config]}"
+      delete_these_lines = false
+      master_config.delete_if do |line|
+        if line == filename_header
+          delete_these_lines = true
+        elsif line == "##### end" and delete_these_lines
+          delete_these_lines = false
+          true
+        else
+          delete_these_lines
+        end
+      end
+    end
+
+    master_config << filename_header
+    master_config << hash_header
+    master_config += File.read(options[:ssh_config]).split("\n")
+    master_config << "##### end\n"
+
+    File.open config_file, 'w' do |f|
+      f.write master_config.join("\n")
+    end
+
+    puts "rlogin ssh_config saved!"
+  end
+
+  exit
+end
+
+if ([:host, :user].map{|k|options[k]}.include? nil) or
+    ([:password, :key].map{|k|options[k]}.delete_if{|v|v==nil}.count == 0)
+  puts "Must specify --host and --user, and at least one of --password or --ssh-key"
+  exit 1
+end
+
+# On a OS X at least, this causes SSH private key passphrases to be entered through the GUI
+# and not the SSH stdin stream we are working with.
+ENV.delete 'SSH_AUTH_SOCK'
+
+ssh_bin = `/usr/bin/which ssh`.chomp
+
+cmd = "#{ssh_bin} -F '#{config_file}' %s -p #{options[:port]} #{options[:user]}@#{options[:host]}"
+
+if options[:key]
+  cmd = sprintf(cmd, "-i '#{options[:key]}' %s")
+end
+
+if options[:proxy]
+  # make sure we have sane defaults
+  options[:proxy_user] ||= Etc.getlogin
+  options[:proxy_port] ||= 22
+
+  # the base proxy setup
+  cmd = sprintf(cmd, "-o ProxyCommand=\"#{ssh_bin} -F '#{config_file}' -W #{options[:host]}:#{options[:port]} %s\"")
+
+  if options[:proxy_password] or options[:proxy_key] or options[:proxy].match(/(\d{1,3}\.){3}(\d{1,3})/)
+    # some random server that we will use to proxy the connection, which will
+    # require authorization
+    cmd = sprintf(cmd, "%s -p #{options[:proxy_port]} #{options[:proxy_user]}@#{options[:proxy]}")
+
+    if options[:proxy_key]
+      cmd = sprintf(cmd, "-i '#{options[:proxy_key]}'")
+    end
+  else
+    # use a named proxy who's configs are in the ssh config file, and doesn't
+    # require interactive authorization
+    cmd = sprintf(cmd, options[:proxy])
+  end
+end
+
+cmd = cmd.sub(/ ?%s/, '')
+
+puts "Executing:\n#{cmd}" if options[:debug]
+
+@ssh = EventExpectr.new cmd,
+  :flush_buffer => (!!options[:debug]), :constrain => true, :force_match => true
+
+# look for the ssh password prompt
+@ssh.expect /^#{options[:proxy_user]}@#{options[:proxy]}'s password:/i do |match|
+  @ssh.expectr.puts options[:proxy_password]
+end
+
+@ssh.expect /^#{options[:user]}@#{options[:host]}'s password:/i do |match|
+  @ssh.expectr.puts options[:password]
+end
+
+# look for the passphrase
+@ssh.expect "Enter passphrase for key '#{options[:key]}': " do |match|
+  @ssh.expectr.puts options[:password]
+end
+@ssh.expect "Enter passphrase for key '#{options[:proxy_key]}': " do |match|
+  @ssh.expectr.puts options[:proxy_password]
+end
+
+# look for a prompt
+@ssh.expect /\$ $/ do |match|
+  user_command_extra = "&& sleep 5 && exit"
+  case options[:root_method]
+  when :su
+    @ssh.expectr.puts "su - #{user_command_extra}"
+  when :sudo
+    @ssh.expectr.puts "sudo -p 'sudo password: ' -i #{user_command_extra}"
+  end
+end
+
+# look for the su (i assumme) password prompt
+@ssh.expect /^Password: / do |match|
+  @ssh.expectr.puts options[:root_password]
+end
+
+# look for the sudo password prompt
+@ssh.expect /^sudo password: / do |match|
+  @ssh.expectr.puts options[:password]
+  @ssh.expectr.flush_buffer = true
+end
+
+# look for the root prompt
+@ssh.expect /# $/ do |match|
+  @ssh.running = false
+end
+
+unless @ssh.run!
+  # this timed out, so tell them that we are attaching anyways
+  puts "WARNING: Attaching session"
+end
+
+@ssh.expectr.interact! :blocking => true
+
+puts "thanks for all the fish"
