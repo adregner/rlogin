@@ -4,6 +4,8 @@ require 'optparse'
 require 'etc'
 require 'event-expectr'
 
+require 'rlogin/init'
+
 options = {:port => 22}
 
 OptionParser.new do |opts|

@@ -14,6 +14,7 @@ Gem::Specification.new do |s|
 
   s.files = `git ls-files lib`.split("\n")
   s.files += `git ls-files bin`.split("\n")
+  s.files += `git ls-files conf`.split("\n")
   s.files.reject! { |fn| fn.include?(".dev") }
 
   s.add_dependency("event-expectr", ">=0.1.1")
