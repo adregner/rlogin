@@ -1,0 +1,11 @@
+#!/usr/bin/env ruby
+
+# If we are working in our development environment, prefer local libraries
+execpath = __FILE__
+if File.symlink? execpath
+  execpath = File.absolute_path File.readlink(execpath), File.dirname(__FILE__)
+end
+libpath = File.expand_path('../../lib', execpath)
+
+$:.unshift(libpath)
+load File.dirname(execpath) + '/rlogin'
