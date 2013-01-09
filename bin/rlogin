@@ -6,7 +6,7 @@ require 'event-expectr'
 
 require 'rlogin/init'
 
-options = {:port => 22}
+options = {:port => 22, :root_method => :sudo, :post_exec => "eval $(resize) || true"}
 
 OptionParser.new do |opts|
   opts.separator ""
@@ -54,6 +54,10 @@ OptionParser.new do |opts|
   opts.separator ""
   opts.separator "Misc options"
 
+  opts.on("--post-login-exec [COMMAND]",
+          "A string to execute once the session is logged in and at the root prompt. (default: \"eval $(resize) || true\")"
+         ) { |opt| options[:post_exec] = opt }
+
   opts.on("--ssh-config [FILENAME]",
           "Adds the contents of the provided ssh_config file to rlogin's master ssh_config file.  You can also edit the master file by hand, it is located in #{File.join(ENV['HOME'], '.config/rlogin/ssh_config')}"
          ) { |opt| options[:ssh_config] = opt }
@@ -66,6 +70,8 @@ OptionParser.new do |opts|
     exit
   end
 end.parse!
+
+puts options if options[:debug]
 
 ##########################################################
 
@@ -161,18 +167,22 @@ puts "Executing:\n#{cmd}" if options[:debug]
 
 # look for the ssh password prompt
 @ssh.expect /^#{options[:proxy_user]}@#{options[:proxy]}'s password:/i do |match|
+  puts options[:proxy_password] if options[:debug]
   @ssh.expectr.puts options[:proxy_password]
 end
 
 @ssh.expect /^#{options[:user]}@#{options[:host]}'s password:/i do |match|
+  puts options[:password] if options[:debug]
   @ssh.expectr.puts options[:password]
 end
 
 # look for the passphrase
 @ssh.expect "Enter passphrase for key '#{options[:key]}': " do |match|
+  puts options[:password] if options[:debug]
   @ssh.expectr.puts options[:password]
 end
 @ssh.expect "Enter passphrase for key '#{options[:proxy_key]}': " do |match|
+  puts options[:proxy_password] if options[:debug]
   @ssh.expectr.puts options[:proxy_password]
 end
 
@@ -189,17 +199,22 @@ end
 
 # look for the su (i assumme) password prompt
 @ssh.expect /^Password: / do |match|
+  puts options[:root_password] if options[:debug]
+  @ssh.expectr.flush_buffer = true
   @ssh.expectr.puts options[:root_password]
 end
 
 # look for the sudo password prompt
 @ssh.expect /^sudo password: / do |match|
-  @ssh.expectr.puts options[:password]
+  puts options[:password] if options[:debug]
   @ssh.expectr.flush_buffer = true
+  @ssh.expectr.puts options[:password]
 end
 
 # look for the root prompt
 @ssh.expect /# $/ do |match|
+  sleep 0.1
+  @ssh.expectr.puts options[:post_exec]
   @ssh.running = false
 end
 
