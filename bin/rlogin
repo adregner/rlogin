@@ -30,8 +30,8 @@ OptionParser.new do |opts|
   opts.on("--root-method [METHOD]", [:su, :sudo],
           "Method to use to gain root access") { |opt| options[:root_method] = opt }
 
-  opts.on("--superuser-password [PASSWORD]",
-          "Root password to use when using \"su\" root method") { |opt| options[:root_password] = opt }
+  opts.on("--root-password [PASSWORD]",
+          "Root password.  Will trigger use of the \"su\" root method.") { |opt| options[:root_password] = opt; options[:root_method] = :su }
 
   opts.separator ""
   opts.separator "SSH Proxy (bastion) options"
@@ -212,7 +212,7 @@ end
 end
 
 # look for the root prompt
-@ssh.expect /^root@|# $/ do |match|
+@ssh.expect /^\[?root@|# $/ do |match|
   sleep 0.1
   @ssh.expectr.puts options[:post_exec]
   @ssh.running = false
