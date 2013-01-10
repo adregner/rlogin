@@ -212,7 +212,7 @@ end
 end
 
 # look for the root prompt
-@ssh.expect /# $/ do |match|
+@ssh.expect /^root@|# $/ do |match|
   sleep 0.1
   @ssh.expectr.puts options[:post_exec]
   @ssh.running = false
